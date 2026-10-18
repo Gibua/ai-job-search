@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { cleanHtml, normalizeSlug, toResult, toDetail, type FreehireJob } from "../src/helpers";
+import { cleanHtml, contractDate, normalizeSlug, toResult, toDetail, type FreehireJob } from "../src/helpers";
 
 function job(overrides: Partial<FreehireJob> = {}): FreehireJob {
   return {
@@ -28,7 +28,8 @@ describe("toResult — reshape into the portal-skill contract", () => {
   test("maps public_slug -> id and posted_at -> date", () => {
     const r = toResult(job());
     expect(r.id).toBe("backend-engineer-acme-ab12cd34");
-    expect(r.date).toBe("2026-07-06T00:00:00Z");
+    // The contract shape is the date part only, like every other portal CLI.
+    expect(r.date).toBe("2026-07-06");
   });
 
   test("carries the required contract fields", () => {
@@ -49,6 +50,24 @@ describe("toResult — reshape into the portal-skill contract", () => {
     expect(r.date).toBeNull();
     expect(r.work_mode).toBeNull();
   });
+
+  test("decodes HTML entities and trims whitespace in the title", () => {
+    // Real title from the index (freehire slug intern-fullstack-amp-ai-innovation-noise-edaawqq2).
+    expect(toResult(job({ title: "Intern - Fullstack &amp; AI Innovation " })).title).toBe(
+      "Intern - Fullstack & AI Innovation",
+    );
+    expect(toResult(job({ title: "R&#38;D Engineer" })).title).toBe("R&D Engineer");
+    expect(toResult(job({ title: "SDE Intern - Frontend   " })).title).toBe("SDE Intern - Frontend");
+  });
+
+  test("a whitespace-only title still falls back to (untitled)", () => {
+    expect(toResult(job({ title: "   " })).title).toBe("(untitled)");
+    expect(toResult(job({ title: "" })).title).toBe("(untitled)");
+  });
+
+  test("detail inherits the cleaned title", () => {
+    expect(toDetail(job({ title: "Data &amp; Analytics Intern" })).title).toBe("Data & Analytics Intern");
+  });
 });
 
 describe("toDetail — adds cleaned description + enrichment", () => {
@@ -68,6 +87,18 @@ describe("toDetail — adds cleaned description + enrichment", () => {
     expect(d.salary).toBe("EUR 90000–120000");
   });
 
+  test("keeps the salary period, so a yearly figure is not read as monthly", () => {
+    const d = toDetail(
+      job({ enrichment: { salary_min: 300000, salary_max: 300000, salary_currency: "INR", salary_period: "year" } }),
+    );
+    expect(d.salary).toBe("INR 300000–300000/year");
+  });
+
+  test("a single-bound salary keeps its period too", () => {
+    const d = toDetail(job({ enrichment: { salary_min: 12000, salary_currency: "INR", salary_period: "month" } }));
+    expect(d.salary).toBe("INR 12000/month");
+  });
+
   test("null enrichment fields when the enrichment object is empty", () => {
     const d = toDetail(job({ enrichment: {} }));
     expect(d.seniority).toBeNull();
@@ -85,6 +116,23 @@ describe("cleanHtml", () => {
   test("returns null for empty input", () => {
     expect(cleanHtml("")).toBeNull();
     expect(cleanHtml(null)).toBeNull();
+  });
+});
+
+describe("contractDate", () => {
+  test("cuts the API's ISO timestamp to YYYY-MM-DD", () => {
+    expect(contractDate("2026-07-06T00:00:00Z")).toBe("2026-07-06");
+    expect(contractDate("2026-07-06T15:30:00+02:00")).toBe("2026-07-06");
+    expect(contractDate("2026-07-06")).toBe("2026-07-06");
+  });
+  test("is null for an absent or non-date value", () => {
+    expect(contractDate(null)).toBeNull();
+    expect(contractDate(undefined)).toBeNull();
+    expect(contractDate("")).toBeNull();
+    expect(contractDate("soon")).toBeNull();
+  });
+  test("detail carries the same shape as search", () => {
+    expect(toDetail(job()).date).toBe("2026-07-06");
   });
 });
 
